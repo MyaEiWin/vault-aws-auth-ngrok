@@ -1,6 +1,35 @@
-# Expose a Local Vault Dev Server with ngrok
+# AWS EC2 Authentication to a Local Vault Dev Server Through ngrok
 
-This guide runs HashiCorp Vault in local development mode and makes it temporarily reachable from the internet through an ngrok HTTPS URL.
+Authenticate an AWS EC2 instance to a local HashiCorp Vault dev server through ngrok and retrieve KV secrets using AWS IAM authentication.
+
+
+## Summary
+
+This lab demonstrates an end-to-end AWS IAM authentication flow between an Amazon Linux 2023 EC2 instance and a Vault dev server running on a local laptop.
+
+The completed setup does the following:
+
+1. Runs Vault dev mode locally with the KV v2 engine mounted at `secret/`.
+2. Stores a demonstration value at `secret/demo`.
+3. Exposes the local Vault API temporarily through an ngrok HTTPS tunnel.
+4. Attaches the AWS IAM role `ec2-vault-role` to the EC2 instance as its instance profile.
+5. Uses the Vault AWS auth method mounted at `aws-vault-policy-1/` to verify the EC2 instance's IAM identity.
+6. Issues the EC2 instance a short-lived Vault token with `aws-secret-policy-1`.
+7. Allows that token to read `secret/demo` without copying the Vault root token or permanent AWS access keys to EC2.
+
+The successful command on EC2 is:
+
+```bash
+vault kv get -field=message secret/demo
+```
+
+Expected result:
+
+```text
+Hello from local Vault
+```
+
+The `app1/` AWS secrets engine is optional and separate from this KV retrieval flow. It is needed only when Vault must generate temporary AWS credentials for an application.
 
 > [!WARNING]
 > This setup is for short-lived learning and testing only. Vault dev mode is insecure, starts automatically unsealed, uses in-memory storage, and loses all data when stopped. Never put production credentials or other real secrets in this server.
@@ -8,18 +37,23 @@ This guide runs HashiCorp Vault in local development mode and makes it temporari
 ## How the setup works
 
 ```text
-Internet client
-      |
-      | HTTPS
-      v
-https://<random-name>.ngrok-free.app
-      |
-      | ngrok tunnel
-      v
-http://127.0.0.1:8200
-      |
-      v
-Local Vault dev server
+Amazon Linux 2023 EC2 instance
+  IAM instance profile: ec2-vault-role
+                  |
+                  | AWS IAM login over HTTPS
+                  v
+      https://<random-name>.ngrok-free.dev
+                  |
+                  | ngrok tunnel
+                  v
+        http://127.0.0.1:8200
+                  |
+                  v
+          Local Vault dev server
+                  |
+                  | aws-secret-policy-1
+                  v
+          KV secret: secret/demo
 ```
 
 You will use three terminals:
@@ -46,7 +80,7 @@ Vault is already installed on this machine and was detected as version `1.20.0` 
 ## Step 1: Open the project directory
 
 ```bash
-cd /home/mya/Documents/ACE/19Sept2026
+cd /home/mya/Documents/ACE/vault-local-ngrok
 ```
 
 ## Step 2: Install ngrok
@@ -93,7 +127,7 @@ Replace `YOUR_NGROK_AUTHTOKEN` with the value from your dashboard.
 Open the first terminal and run:
 
 ```bash
-cd /home/mya/Documents/ACE/19Sept2026
+cd /home/mya/Documents/ACE/vault-local-ngrok
 vault server -dev -dev-listen-address="127.0.0.1:8200"
 
 ```
@@ -139,6 +173,7 @@ Confirm that Vault is running:
 ```bash
 vault status
 vault token lookup
+vault login
 ```
 
 Expected status values include:
@@ -261,19 +296,19 @@ Connections                   ttl     opn     rt1     rt5     p50     p90
 In this example, the public Vault address is:
 
 ```text
-https://abc123.ngrok-free.app
+https://xxxxx.ngrok-free.dev
 ```
 
 Keep Terminal 3 running. A free ngrok URL normally changes when the tunnel is restarted.
 
 ## Step 7: Test public access
 
-Replace `abc123.ngrok-free.app` in every command below with the hostname shown in Terminal 3.
+Replace `https://xxxxx.ngrok-free.dev` in every command below with the hostname shown in Terminal 3.
 
 Test the Vault health endpoint without a token:
 
 ```bash
-curl https://abc123.ngrok-free.app/v1/sys/health
+curl https://YOUR-NGROK-HOSTNAME.ngrok-free.dev/v1/sys/health
 ```
 
 The JSON response should show that Vault is initialized and not sealed.
@@ -281,7 +316,7 @@ The JSON response should show that Vault is initialized and not sealed.
 Test authenticated access using the Vault CLI:
 
 ```bash
-VAULT_ADDR="https://abc123.ngrok-free.app" \
+VAULT_ADDR="https://YOUR-NGROK-HOSTNAME.ngrok-free.dev" \
 VAULT_TOKEN="PASTE_THE_ROOT_TOKEN" \
 vault kv get secret/demo
 ```
@@ -289,26 +324,45 @@ vault kv get secret/demo
 The public Vault UI is available at:
 
 ```text
-https://abc123.ngrok-free.app/ui
+https://YOUR-NGROK-HOSTNAME.ngrok-free.dev/ui
 ```
 
-## Step 8: Create a restricted internet token
+## Step 8: Connect the EC2 instance to Vault
 
-Do not give an internet client the root token. Create a short-lived token that can access only the demonstration secret.
+The EC2 instance uses the AWS IAM role `ec2-vault-role`. Attach that role to the instance as its IAM instance profile.
 
-Return to Terminal 2 and make sure it is using the local Vault address and root token:
+The Vault server continues to run on the laptop. Do **not** start another Vault server on EC2. The EC2 instance only needs a Vault client. The Vault CLI is the easiest client for this lab; Vault Agent, an application SDK, or the HTTP API are alternatives.
+
+### 8.1 Verify the existing Vault mounts
+
+On the laptop, use the dev root token:
 
 ```bash
 export VAULT_ADDR="http://127.0.0.1:8200"
 export VAULT_TOKEN="PASTE_THE_ROOT_TOKEN_FROM_TERMINAL_1"
+
+vault auth list
+vault secrets list
 ```
 
-Create a policy named `internet-demo`:
+This lab uses these existing paths:
+
+```text
+aws-vault-policy-1/    AWS authentication method
+app1/                 AWS secrets engine
+secret/               KV v2 secrets engine
+```
+
+Do not enable another AWS secrets engine at `aws-secrets/`; use the existing `app1/` mount.
+
+### 8.2 Create the Vault policy for the EC2 workload
+
+The EC2 workload only needs to read the demonstration KV secret:
 
 ```bash
-vault policy write internet-demo - <<'EOF'
+vault policy write aws-secret-policy-1 - <<'EOF'
 path "secret/data/demo" {
-  capabilities = ["create", "update", "read"]
+  capabilities = ["read"]
 }
 
 path "secret/metadata/demo" {
@@ -317,46 +371,315 @@ path "secret/metadata/demo" {
 EOF
 ```
 
-Create a token that expires after 30 minutes:
+Verify it:
 
 ```bash
-vault token create \
-  -policy="internet-demo" \
-  -ttl="30m" \
-  -explicit-max-ttl="30m"
+vault policy read aws-secret-policy-1
 ```
 
-The output contains a new token beginning with `hvs.`. Give the remote test client this restricted token instead of the root token.
+### 8.3 Configure the AWS authentication role
 
-Test the restricted token through ngrok:
+Set the AWS account ID and the ARN of the IAM role attached to the EC2 instance:
 
 ```bash
-export VAULT_ADDR="https://abc123.ngrok-free.app"
-export VAULT_TOKEN="PASTE_THE_RESTRICTED_TOKEN"
+export AWS_ACCOUNT_ID="123456789012"
+export EC2_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/ec2-vault-role"
+```
 
+Create a Vault AWS-auth role at the existing `aws-vault-policy-1/` mount:
+
+```bash
+vault write auth/aws-vault-policy-1/role/ec2-vault-role \
+  auth_type="iam" \
+  bound_iam_principal_arn="$EC2_ROLE_ARN" \
+  resolve_aws_unique_ids=false \
+  policies="aws-secret-policy-1" \
+  token_ttl="30m" \
+  token_max_ttl="1h"
+```
+
+Example output:
+
+```text
+Success! Data written to: auth/aws-vault-policy-1/role/ec2-vault-role
+```
+
+Read the configuration back:
+
+```bash
+vault read auth/aws-vault-policy-1/role/ec2-vault-role
+```
+
+Example output:
+
+```text
+Key                               Value
+---                               -----
+allow_instance_migration          false
+auth_type                         iam
+bound_account_id                  []
+bound_ami_id                      []
+bound_ec2_instance_id             <nil>
+bound_iam_instance_profile_arn    []
+bound_iam_principal_arn           [arn:aws:iam::xxxxxx:role/ec2-vault-role]
+bound_iam_principal_id            []
+bound_iam_role_arn                []
+bound_region                      []
+bound_subnet_id                   []
+bound_vpc_id                      []
+disallow_reauthentication         false
+inferred_aws_region               n/a
+inferred_entity_type              n/a
+policies                          [aws-secret-policy-1]
+resolve_aws_unique_ids            false
+role_id                           REDACTED
+role_tag                          n/a
+token_bound_cidrs                 []
+token_explicit_max_ttl            0s
+token_max_ttl                     1h
+token_no_default_policy           false
+token_num_uses                    0
+token_period                      0s
+token_policies                    [aws-secret-policy-1]
+token_ttl                         30m
+token_type                        default
+```
+
+This dev lab disables AWS unique-ID resolution because the local AWS auth mount has no AWS client credentials. This binds the role by ARN instead of its immutable AWS principal ID. For production, configure a dedicated AWS identity with `iam:GetRole` permission and keep unique-ID resolution enabled. Do not attach a broad `sts:*` policy on `*`.
+
+### 8.4 Install a Vault client on EC2
+
+SSH to the EC2 instance and identify its operating system:
+
+```bash
+cat /etc/os-release
+```
+
+Check whether the Vault CLI is already installed:
+
+```bash
+vault version
+```
+
+If it is not installed, use the commands for the EC2 instance's operating system.
+
+For Ubuntu or Debian:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y wget gpg
+
+wget -O - https://apt.releases.hashicorp.com/gpg \
+  | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" \
+  | sudo tee /etc/apt/sources.list.d/hashicorp.list
+
+sudo apt-get update
+sudo apt-get install -y vault
+```
+
+For this lab's **Amazon Linux 2023** EC2 instance, use `dnf` instead of `apt-get`:
+
+```bash
+sudo dnf install -y dnf-plugins-core shadow-utils
+
+sudo dnf config-manager \
+  --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+
+sudo dnf install -y vault
+```
+
+Amazon Linux does not provide `apt-get`. If `sudo apt-get update` returns `command not found`, use the Amazon Linux 2023 commands above.
+
+Verify the client:
+
+```bash
+vault version
+```
+
+These commands come from the [official Vault installation guide](https://developer.hashicorp.com/vault/install).
+
+Installing the Vault package provides the CLI needed by this lab. The Vault server must remain on the laptop, so do not run `vault server -dev` or start the `vault` systemd service on the EC2 instance.
+
+### 8.5 Authenticate from EC2 using its IAM role
+
+First, verify through EC2 Instance Metadata Service v2 that an IAM role is attached:
+
+```bash
+IMDS_TOKEN=$(curl -fsS -X PUT \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 300" \
+  http://169.254.169.254/latest/api/token)
+
+curl -fsS \
+  -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+  http://169.254.169.254/latest/meta-data/iam/security-credentials/
+```
+
+The response should be:
+
+```text
+ec2-vault-role
+```
+
+If AWS CLI is installed, verify the AWS identity as well:
+
+```bash
+aws sts get-caller-identity
+```
+
+The returned ARN should contain `assumed-role/ec2-vault-role/`.
+
+Set the public ngrok address shown on the laptop in Terminal 3:
+
+```bash
+export VAULT_ADDR="https://YOUR-NGROK-HOSTNAME.ngrok-free.dev"
+```
+
+Check network access from EC2 to the laptop's Vault tunnel:
+
+```bash
+curl -fsS "$VAULT_ADDR/v1/sys/health"
+```
+
+The response should include `"initialized":true` and `"sealed":false`. If this fails, confirm that both Vault and ngrok are still running on the laptop and that `VAULT_ADDR` contains the current ngrok hostname.
+
+Log in to Vault. The Vault CLI automatically uses the instance-profile credentials provided by EC2 Instance Metadata Service:
+
+```bash
+vault login \
+  -method=aws \
+  -path=aws-vault-policy-1 \
+  region=auto \
+  role=ec2-vault-role
+```
+
+Do not copy the laptop's Vault root token to EC2. A successful AWS login returns a short-lived Vault token with `aws-secret-policy-1` attached.
+
+If an IAM server ID header was configured on the Vault AWS auth mount, include the exact configured value during login:
+
+```bash
+vault login \
+  -method=aws \
+  -path=aws-vault-policy-1 \
+  region=auto \
+  header_value="YOUR-CONFIGURED-SERVER-ID" \
+  role=ec2-vault-role
+```
+
+Example successful login output:
+
+```text
+Success! You are now authenticated. The token information displayed below
+is already stored in the token helper. You do NOT need to run "vault login"
+again. Future Vault requests will automatically use this token.
+
+Key                      Value
+---                      -----
+token                    hvs.REDACTED
+token_accessor           REDACTED
+token_duration           30m
+token_renewable          true
+token_policies           ["aws-secret-policy-1" "default"]
+identity_policies        []
+policies                 ["aws-secret-policy-1" "default"]
+token_meta_auth_type     iam
+token_meta_role_id       REDACTED
+token_meta_account_id    REDACTED
+```
+
+Do not add `header_value` when the auth mount was not configured to require one.
+
+Verify the Vault token and attached policy:
+
+```bash
+vault token lookup
+```
+
+Example output:
+
+```text
+Key                 Value
+---                 -----
+accessor            REDACTED
+creation_time       1789805184
+creation_ttl        30m
+display_name        aws-vault-policy-1-ec2-vault-role/i-xxxxx
+entity_id           REDACTED
+expire_time         2026-09-19T04:36:24.846828216-04:00
+explicit_max_ttl    0s
+id                  hvs.REDACTED
+issue_time          2026-09-19T04:06:24.846832739-04:00
+meta                map[account_id:REDACTED auth_type:iam role_id:REDACTED]
+num_uses            0
+orphan              true
+path                auth/aws-vault-policy-1/login
+policies            [aws-secret-policy-1 default]
+renewable           true
+ttl                 28m37s
+type                service
+```
+
+The output should list `aws-secret-policy-1` under `policies`.
+
+### 8.6 Retrieve the KV secret from EC2
+
+```bash
 vault kv get secret/demo
 ```
 
-Test the HTTP API directly:
+To return only the `message` value:
 
 ```bash
-curl \
-  -H "X-Vault-Token: PASTE_THE_RESTRICTED_TOKEN" \
-  https://abc123.ngrok-free.app/v1/secret/data/demo
+vault kv get -field=message secret/demo
 ```
 
-Do not put a Vault token in a URL query string.
+The policy intentionally prevents this EC2 identity from changing or deleting the secret.
 
-## Step 9: Connect a remote application
-
-Configure the remote test application with these two values:
+After testing, remove the cached Vault token from the EC2 instance:
 
 ```bash
-export VAULT_ADDR="https://abc123.ngrok-free.app"
-export VAULT_TOKEN="PASTE_THE_RESTRICTED_TOKEN"
+vault token revoke -self
+unset VAULT_ADDR IMDS_TOKEN
 ```
 
-Use the current ngrok address and the restricted token created in Step 8. Do not use the local `127.0.0.1` address on the remote machine.
+## Step 9: Optional AWS secrets-engine integration
+
+The `app1/` AWS secrets engine is not required for EC2 to read `secret/demo`. AWS authentication gives the instance a Vault token; the KV engine returns the application secret.
+
+Use `app1/` only if the workload also needs Vault to generate a second set of temporary AWS credentials. This lab reuses `ec2-vault-role` and the existing `EC2_ROLE_ARN` variable for simplicity.
+
+> [!CAUTION]
+> Reusing one IAM role for both the EC2 instance profile and the AWS secrets engine mixes two responsibilities. A separate target role is recommended outside this temporary lab. When the same role is reused, its trust policy must allow both the EC2 service and the AWS identity configured for Vault's `app1/` engine.
+
+After configuring `app1/config/root` with a dedicated Vault AWS identity, create the secrets-engine role:
+
+```bash
+export AWS_ACCOUNT_ID="123456789012"
+export EC2_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/ec2-vault-role"
+
+vault write app1/roles/ec2-operator \
+  credential_type="assumed_role" \
+  role_arns="$EC2_ROLE_ARN"
+```
+
+The AWS identity configured at `app1/config/root` must have `sts:AssumeRole` permission for `$EC2_ROLE_ARN`. The trust policy of `ec2-vault-role` must also trust that identity. Its existing EC2 service trust must remain in place so AWS can continue attaching the role to the instance.
+
+Add credential-generation permission to `aws-secret-policy-1` only if the EC2 workload needs it:
+
+```hcl
+path "app1/sts/ec2-operator" {
+  capabilities = ["update"]
+}
+```
+
+Then generate temporary credentials from EC2:
+
+```bash
+vault write app1/sts/ec2-operator ttl="30m"
+```
+
+The AWS IAM policies attached to `ec2-vault-role` determine which EC2 API operations those generated credentials can perform.
 
 ## Step 10: Shut everything down
 
@@ -398,6 +721,8 @@ Check which token is active:
 
 ```bash
 vault token lookup
+
+
 ```
 
 The restricted token can access only `secret/demo`; denial for other paths is expected.
