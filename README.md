@@ -118,9 +118,6 @@ Authtoken saved to configuration file: /home/xx/snap/ngrok/429/.config/ngrok/ngr
 
 Replace `YOUR_NGROK_AUTHTOKEN` with the value from your dashboard.
 
-> [!CAUTION]
-> Do not put the ngrok authtoken in this README, source control, screenshots, or chat messages.
-
 ## Step 4: Start Vault in Terminal 1
 
 Open the first terminal and run:
