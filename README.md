@@ -244,18 +244,14 @@ ngrok http http://127.0.0.1:8200
 
 ngrok displays a forwarding URL similar to:
 
-```text
-ngrok                                                                                               (Ctrl+C to quit)
-                                                                                                                    
-🚪 One gateway for every AI model. https://app.ngrok.ai                                                             
-                                                                                                                    
+```text                                                                                                                  
 Session Status                online                                                                                
 Account                       aa-hello (Plan: Free)                                                                 
 Version                       3.39.11                                                                               
 Region                        United States (us)                                                                    
 Latency                       38ms                                                                                  
 Web Interface                 http://127.0.0.1:4040                                                                 
-Forwarding                    https://sappy-camping-unplanned.ngrok-free.dev -> http://127.0.0.1:8200               
+Forwarding                    https://xxxxx.ngrok-free.dev -> http://127.0.0.1:8200               
                                                                                                                     
 Connections                   ttl     opn     rt1     rt5     p50     p90                                           
                               0       0       0.00    0.00    0.00    0.00                                          
