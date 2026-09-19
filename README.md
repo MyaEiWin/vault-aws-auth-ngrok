@@ -80,7 +80,7 @@ Vault is already installed on this machine and was detected as version `1.20.0` 
 ## Step 1: Open the project directory
 
 ```bash
-cd /home/mya/Documents/ACE/vault-local-ngrok
+cd /vault-local-ngrok
 ```
 
 ## Step 2: Install ngrok
@@ -114,7 +114,7 @@ If Snap is unavailable, follow the [official ngrok Linux installation instructio
 ```bash
 ngrok config add-authtoken "YOUR_NGROK_AUTHTOKEN"
 
-Authtoken saved to configuration file: /home/mya/snap/ngrok/429/.config/ngrok/ngrok.yml
+Authtoken saved to configuration file: /home/xx/snap/ngrok/429/.config/ngrok/ngrok.yml
 ```
 
 Replace `YOUR_NGROK_AUTHTOKEN` with the value from your dashboard.
