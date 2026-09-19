@@ -1,0 +1,15 @@
+# Local environment variables and credentials
+.env
+.env.*
+!.env.example
+
+# Vault and ngrok local data
+.vault-token
+ngrok.yml
+vault-data/
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+*~
