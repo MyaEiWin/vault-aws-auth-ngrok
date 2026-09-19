@@ -64,7 +64,6 @@ You will use three terminals:
 
 ## Prerequisites
 
-- A Linux laptop
 - HashiCorp Vault installed
 - An [ngrok account](https://dashboard.ngrok.com/signup)
 - `sudo` access if ngrok needs to be installed
